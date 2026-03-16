@@ -1,4 +1,4 @@
-name: Moneyzon Telegram Premium Forwarder
+name: Moneyzon Telegram Forwarder
 
 on:
   workflow_dispatch:
@@ -44,9 +44,8 @@ jobs:
 
           EXTRAPAY_BOT_USERNAME: "ExtraPeBot"
 
-          BRAND_TITLE: "🔥 Moneyzon Premium Deal"
-          BRAND_BUTTON_TEXT: "Powered by Moneyzon"
-          BRAND_BUTTON_URL: "https://t.me/+Pn4M2jtiFZBhMDhl"
+          FOOTER_TEXT: "Powered by Moneyzon"
+          FOOTER_LINK: "https://t.me/+Pn4M2jtiFZBhMDhl"
 
         run: python app.py
 
