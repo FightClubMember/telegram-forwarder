@@ -21,7 +21,11 @@ def parse_source_channel_ids(raw: str) -> List[int]:
 
 
 def default_channel_state() -> dict:
-    return {"last_message_id": 0, "processed_group_ids": []}
+    return {
+        "last_message_id": 0,
+        "processed_group_ids": [],
+        "initialized": False,
+    }
 
 
 def load_state(source_channel_ids: List[int]) -> dict:
@@ -40,8 +44,10 @@ def load_state(source_channel_ids: List[int]) -> dict:
         key = str(channel_id)
         if key not in data["channels"]:
             data["channels"][key] = default_channel_state()
+
         data["channels"][key].setdefault("last_message_id", 0)
         data["channels"][key].setdefault("processed_group_ids", [])
+        data["channels"][key].setdefault("initialized", False)
 
     return data
 
@@ -227,7 +233,7 @@ def send_text(bot_token: str, chat_id: str, text: str):
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
-            "disable_web_page_preview": False,
+            "disable_web_page_preview": True,
         },
     )
 
@@ -347,6 +353,13 @@ async def resolve_channel_entity(client: TelegramClient, source_channel_id: int)
         f"Source channel {source_channel_id} not found in this USER_SESSION. "
         f"Join/open it with the same Telegram account first."
     )
+
+
+async def get_latest_message_id(client: TelegramClient, source_entity) -> int:
+    async for msg in client.iter_messages(source_entity, limit=1):
+        if msg:
+            return msg.id
+    return 0
 
 
 async def collect_new_messages(client: TelegramClient, source_entity, min_id: int):
@@ -492,9 +505,18 @@ async def process_channel(
 
     last_message_id = int(channel_state.get("last_message_id", 0))
     processed_group_ids = set(str(x) for x in channel_state.get("processed_group_ids", []))
+    initialized = bool(channel_state.get("initialized", False))
 
     print(f"Resolving source channel {source_channel_id}")
     source_entity = await resolve_channel_entity(client, source_channel_id)
+
+    # First run: do not send old messages
+    if not initialized:
+        latest_id = await get_latest_message_id(client, source_entity)
+        channel_state["last_message_id"] = latest_id
+        channel_state["initialized"] = True
+        print(f"Initialized {source_channel_id} at latest message id {latest_id}. Old messages skipped.")
+        return
 
     print(f"Checking posts in {source_channel_id} after message {last_message_id}")
     new_messages = await collect_new_messages(client, source_entity, last_message_id)
