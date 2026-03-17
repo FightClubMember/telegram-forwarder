@@ -166,13 +166,26 @@ def is_shopping_url(url: str) -> bool:
     return any(host == allowed or host.endswith("." + allowed) for allowed in shopping_hosts)
 
 
-def build_footer_only_caption(source_text: str, footer_text: str, footer_link: str) -> str:
+def build_footer_only_caption(source_text: str, footer_text: str, footer_link: str):
     source_text = clean_text(source_text)
-    footer_block = f"{footer_text}\n{footer_link}"
 
     if source_text:
-        return f"{source_text}\n\n{footer_block}"
-    return footer_block
+        final_text = f"{source_text}\n\n{footer_text}"
+        offset = len(source_text) + 2
+    else:
+        final_text = footer_text
+        offset = 0
+
+    entities = [
+        {
+            "type": "text_link",
+            "offset": offset,
+            "length": len(footer_text),
+            "url": footer_link,
+        }
+    ]
+
+    return final_text, entities
 
 
 def file_kind(path: str) -> str:
@@ -238,15 +251,20 @@ async def download_media(client: TelegramClient, message, folder: str) -> Option
     return await client.download_media(message, file=folder)
 
 
-def send_text(bot_token: str, chat_id: str, text: str):
+def send_text(bot_token: str, chat_id: str, text: str, entities=None):
+    data = {
+        "chat_id": chat_id,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
+
+    if entities:
+        data["entities"] = json.dumps(entities)
+
     return tg_request(
         bot_token,
         "sendMessage",
-        data={
-            "chat_id": chat_id,
-            "text": text,
-            "disable_web_page_preview": True,
-        },
+        data=data,
     )
 
 
@@ -255,43 +273,56 @@ def send_single_file(
     chat_id: str,
     file_path: str,
     caption: str,
+    caption_entities=None,
 ):
     kind = file_kind(file_path)
     caption = smart_trim(caption, 1024)
 
     if kind == "photo":
         with open(file_path, "rb") as f:
+            data = {
+                "chat_id": chat_id,
+                "caption": caption,
+            }
+            if caption_entities:
+                data["caption_entities"] = json.dumps(caption_entities)
+
             return tg_request(
                 bot_token,
                 "sendPhoto",
-                data={
-                    "chat_id": chat_id,
-                    "caption": caption,
-                },
+                data=data,
                 files={"photo": f},
             )
 
     if kind == "video":
         with open(file_path, "rb") as f:
+            data = {
+                "chat_id": chat_id,
+                "caption": caption,
+                "supports_streaming": True,
+            }
+            if caption_entities:
+                data["caption_entities"] = json.dumps(caption_entities)
+
             return tg_request(
                 bot_token,
                 "sendVideo",
-                data={
-                    "chat_id": chat_id,
-                    "caption": caption,
-                    "supports_streaming": True,
-                },
+                data=data,
                 files={"video": f},
             )
 
     with open(file_path, "rb") as f:
+        data = {
+            "chat_id": chat_id,
+            "caption": caption,
+        }
+        if caption_entities:
+            data["caption_entities"] = json.dumps(caption_entities)
+
         return tg_request(
             bot_token,
             "sendDocument",
-            data={
-                "chat_id": chat_id,
-                "caption": caption,
-            },
+            data=data,
             files={"document": f},
         )
 
@@ -300,7 +331,8 @@ def send_album(
     bot_token: str,
     chat_id: str,
     media_items: List[Tuple[str, str]],
-    caption: str
+    caption: str,
+    caption_entities=None,
 ):
     media = []
     opened_files = []
@@ -318,6 +350,8 @@ def send_album(
 
             if idx == 0:
                 item["caption"] = smart_trim(caption, 1024)
+                if caption_entities:
+                    item["caption_entities"] = caption_entities
 
             media.append(item)
 
@@ -416,7 +450,7 @@ async def process_single(
 ):
     original_text = message.message or ""
     rewritten_text = await rewrite_links_in_text(client, extrapay_bot_username, original_text)
-    final_caption = build_footer_only_caption(rewritten_text, footer_text, footer_link)
+    final_caption, caption_entities = build_footer_only_caption(rewritten_text, footer_text, footer_link)
 
     temp_dir = tempfile.mkdtemp(prefix="moneyzon_single_")
     try:
@@ -430,6 +464,7 @@ async def process_single(
                     chat_id=dest_channel_id,
                     file_path=file_path,
                     caption=final_caption,
+                    caption_entities=caption_entities,
                 )
                 print(f"Sent media message {message.id}")
             else:
@@ -437,6 +472,7 @@ async def process_single(
                     bot_token=bot_token,
                     chat_id=dest_channel_id,
                     text=final_caption,
+                    entities=caption_entities,
                 )
                 print(f"Media missing, sent as text: {message.id}")
         else:
@@ -444,6 +480,7 @@ async def process_single(
                 bot_token=bot_token,
                 chat_id=dest_channel_id,
                 text=final_caption,
+                entities=caption_entities,
             )
             print(f"Sent text message {message.id}")
 
@@ -467,7 +504,7 @@ async def process_album(
             break
 
     rewritten_text = await rewrite_links_in_text(client, extrapay_bot_username, base_text)
-    final_caption = build_footer_only_caption(rewritten_text, footer_text, footer_link)
+    final_caption, caption_entities = build_footer_only_caption(rewritten_text, footer_text, footer_link)
 
     temp_dir = tempfile.mkdtemp(prefix="moneyzon_album_")
     try:
@@ -484,6 +521,7 @@ async def process_album(
                 chat_id=dest_channel_id,
                 media_items=media_items,
                 caption=final_caption,
+                caption_entities=caption_entities,
             )
             print(f"Sent album with {len(media_items)} items")
         else:
@@ -491,6 +529,7 @@ async def process_album(
                 bot_token=bot_token,
                 chat_id=dest_channel_id,
                 text=final_caption,
+                entities=caption_entities,
             )
             print("Album had no downloadable media, sent as text")
 
