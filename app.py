@@ -1,5 +1,4 @@
 import asyncio
-import html
 import json
 import os
 import re
@@ -78,10 +77,6 @@ def tg_request(bot_token: str, method: str, data=None, files=None):
     return payload
 
 
-def escape_html(text: str) -> str:
-    return html.escape(text or "", quote=True)
-
-
 def normalize_url(url: str) -> str:
     url = url.strip()
     if url.startswith("t.me/"):
@@ -92,6 +87,7 @@ def normalize_url(url: str) -> str:
 def extract_urls(text: str) -> List[str]:
     if not text:
         return []
+
     pattern = r"(https?://[^\s]+|t\.me/[^\s]+)"
     matches = re.findall(pattern, text, flags=re.IGNORECASE)
 
@@ -110,7 +106,6 @@ def clean_text(text: str) -> str:
         return ""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"\n{3,}", "\n\n", text)
-    text = re.sub(r"[ \t]+", " ", text)
     return text.strip()
 
 
@@ -124,76 +119,60 @@ def smart_trim(text: str, limit: int = 1024) -> str:
     return trimmed.rstrip() + "..."
 
 
-def is_convertible_url(url: str) -> bool:
+def get_host(url: str) -> str:
     try:
         host = urlparse(url).netloc.lower()
     except Exception:
-        return False
+        return ""
 
     if host.startswith("www."):
         host = host[4:]
 
-    allowed_hosts = [
-        "flipkart.com",
-        "fkrt.it",
+    return host
+
+
+def is_shopping_url(url: str) -> bool:
+    host = get_host(url)
+
+    shopping_hosts = [
+        "amazon.in", "amazon.com", "amzn.to",
+        "flipkart.com", "fkrt.it",
         "myntra.com",
-        "amazon.in",
-        "amazon.com",
-        "amzn.to",
-    ]
-    return any(host == allowed or host.endswith("." + allowed) for allowed in allowed_hosts)
-
-
-def remove_non_deal_links(text: str) -> str:
-    urls = extract_urls(text)
-    updated = text
-    for url in urls:
-        if not is_convertible_url(url):
-            updated = updated.replace(url, "")
-    return clean_text(updated)
-
-
-def looks_like_deal_post(text: str, has_media: bool) -> bool:
-    text_l = (text or "").lower()
-
-    deal_words = [
-        "flipkart", "myntra", "amazon", "deal", "offer", "loot", "coupon",
-        "off", "₹", "rs", "price", "buy", "shop", "limited", "free",
-        "sale", "discount", "lowest", "order", "link"
-    ]
-
-    spam_words = [
-        "subscribers", "join channel", "view channel", "for help",
-        "@loot", "telegram channel", "disclaimer", "fair earning",
-        "youtube", "youtu.be", "subscribe", "follow me"
+        "ajio.com",
+        "meesho.com",
+        "tatacliq.com",
+        "nykaa.com",
+        "snapdeal.com",
+        "jiomart.com",
+        "bigbasket.com",
+        "croma.com",
+        "reliancedigital.in",
+        "shopsy.in",
+        "paytmmall.com",
+        "firstcry.com",
+        "hopscotch.in",
+        "purplle.com",
+        "zivame.com",
+        "libas.in",
+        "hm.com",
+        "zara.com",
+        "westside.com",
+        "decathlon.in",
+        "blinkit.com",
+        "swiggy.com",
+        "zepto.com",
     ]
 
-    deal_score = sum(1 for word in deal_words if word in text_l)
-    spam_score = sum(1 for word in spam_words if word in text_l)
-
-    urls = extract_urls(text)
-    has_deal_link = any(is_convertible_url(u) for u in urls)
-
-    if has_deal_link:
-        return True
-
-    if deal_score >= 2 and spam_score <= 2:
-        return True
-
-    if has_media and deal_score >= 1 and spam_score <= 1:
-        return True
-
-    return False
+    return any(host == allowed or host.endswith("." + allowed) for allowed in shopping_hosts)
 
 
 def build_footer_only_caption(source_text: str, footer_text: str, footer_link: str) -> str:
     source_text = clean_text(source_text)
-    safe_text = escape_html(source_text)
-    footer = f'<a href="{escape_html(footer_link)}">{escape_html(footer_text)}</a>'
+    footer_block = f"{footer_text}\n{footer_link}"
 
-    if safe_text:
-        return f"{safe_text}\n\n{footer}"
-    return footer
+    if source_text:
+        return f"{source_text}\n\n{footer_block}"
+    return footer_block
 
 
 def file_kind(path: str) -> str:
@@ -245,15 +224,11 @@ async def rewrite_links_in_text(
     if not urls:
         return text
 
-    replacements: Dict[str, str] = {}
-    for old_url in urls:
-        if is_convertible_url(old_url):
-            new_url = await convert_link_via_extrapay(client, bot_username, old_url)
-            replacements[old_url] = new_url
-
     updated = text
-    for old_url, new_url in replacements.items():
-        updated = updated.replace(old_url, new_url)
+    for old_url in urls:
+        if is_shopping_url(old_url):
+            new_url = await convert_link_via_extrapay(client, bot_username, old_url)
+            updated = updated.replace(old_url, new_url)
 
     return clean_text(updated)
 
@@ -270,41 +245,63 @@ def send_text(bot_token: str, chat_id: str, text: str):
         data={
             "chat_id": chat_id,
             "text": text,
-            "parse_mode": "HTML",
             "disable_web_page_preview": True,
         },
     )
 
 
-def send_single_file(bot_token: str, chat_id: str, file_path: str, caption: str):
+def send_single_file(
+    bot_token: str,
+    chat_id: str,
+    file_path: str,
+    caption: str,
+):
     kind = file_kind(file_path)
     caption = smart_trim(caption, 1024)
 
     if kind == "photo":
         with open(file_path, "rb") as f:
             return tg_request(
-                bot_token, "sendPhoto",
-                data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                bot_token,
+                "sendPhoto",
+                data={
+                    "chat_id": chat_id,
+                    "caption": caption,
+                },
                 files={"photo": f},
             )
 
     if kind == "video":
         with open(file_path, "rb") as f:
             return tg_request(
-                bot_token, "sendVideo",
-                data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML", "supports_streaming": True},
+                bot_token,
+                "sendVideo",
+                data={
+                    "chat_id": chat_id,
+                    "caption": caption,
+                    "supports_streaming": True,
+                },
                 files={"video": f},
             )
 
     with open(file_path, "rb") as f:
         return tg_request(
-            bot_token, "sendDocument",
-            data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+            bot_token,
+            "sendDocument",
+            data={
+                "chat_id": chat_id,
+                "caption": caption,
+            },
             files={"document": f},
         )
 
 
-def send_album(bot_token: str, chat_id: str, media_items: List[Tuple[str, str]], caption: str):
+def send_album(
+    bot_token: str,
+    chat_id: str,
+    media_items: List[Tuple[str, str]],
+    caption: str
+):
     media = []
     opened_files = []
 
@@ -321,7 +318,6 @@ def send_album(bot_token: str, chat_id: str, media_items: List[Tuple[str, str]],
 
             if idx == 0:
                 item["caption"] = smart_trim(caption, 1024)
-                item["parse_mode"] = "HTML"
 
             media.append(item)
 
@@ -330,9 +326,13 @@ def send_album(bot_token: str, chat_id: str, media_items: List[Tuple[str, str]],
         return tg_request(
             bot_token,
             "sendMediaGroup",
-            data={"chat_id": chat_id, "media": json.dumps(media)},
+            data={
+                "chat_id": chat_id,
+                "media": json.dumps(media),
+            },
             files=files_payload,
         )
+
     finally:
         for f in opened_files:
             try:
@@ -392,56 +392,81 @@ def build_items(messages):
     album_items = []
     for grouped_id, grouped_messages in albums.items():
         grouped_messages = sorted(grouped_messages, key=lambda x: x.id)
-        album_items.append({"type": "album", "group_id": grouped_id, "messages": grouped_messages})
+        album_items.append(
+            {
+                "type": "album",
+                "group_id": grouped_id,
+                "messages": grouped_messages,
+            }
+        )
 
     items = singles + album_items
     items.sort(key=lambda x: min(m.id for m in x["messages"]))
     return items
 
 
-async def process_single(client, bot_token, dest_channel_id, message, extrapay_bot_username, footer_text, footer_link):
+async def process_single(
+    client: TelegramClient,
+    bot_token: str,
+    dest_channel_id: str,
+    message,
+    extrapay_bot_username: str,
+    footer_text: str,
+    footer_link: str,
+):
     original_text = message.message or ""
-    has_media = bool(message.photo or message.video or message.document)
-
-    if not looks_like_deal_post(original_text, has_media):
-        print(f"Skipped non-deal message {message.id}")
-        return
-
-    cleaned_source = remove_non_deal_links(original_text)
-    rewritten_text = await rewrite_links_in_text(client, extrapay_bot_username, cleaned_source)
+    rewritten_text = await rewrite_links_in_text(client, extrapay_bot_username, original_text)
     final_caption = build_footer_only_caption(rewritten_text, footer_text, footer_link)
 
     temp_dir = tempfile.mkdtemp(prefix="moneyzon_single_")
     try:
+        has_media = bool(message.photo or message.video or message.document)
+
         if has_media:
             file_path = await download_media(client, message, temp_dir)
             if file_path:
-                send_single_file(bot_token, dest_channel_id, file_path, final_caption)
-                print(f"Sent media deal message {message.id}")
+                send_single_file(
+                    bot_token=bot_token,
+                    chat_id=dest_channel_id,
+                    file_path=file_path,
+                    caption=final_caption,
+                )
+                print(f"Sent media message {message.id}")
             else:
-                send_text(bot_token, dest_channel_id, final_caption)
+                send_text(
+                    bot_token=bot_token,
+                    chat_id=dest_channel_id,
+                    text=final_caption,
+                )
+                print(f"Media missing, sent as text: {message.id}")
         else:
-            send_text(bot_token, dest_channel_id, final_caption)
-            print(f"Sent text deal message {message.id}")
+            send_text(
+                bot_token=bot_token,
+                chat_id=dest_channel_id,
+                text=final_caption,
+            )
+            print(f"Sent text message {message.id}")
+
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-async def process_album(client, bot_token, dest_channel_id, messages, extrapay_bot_username, footer_text, footer_link):
+async def process_album(
+    client: TelegramClient,
+    bot_token: str,
+    dest_channel_id: str,
+    messages: List,
+    extrapay_bot_username: str,
+    footer_text: str,
+    footer_link: str,
+):
     base_text = ""
     for msg in messages:
         if msg.message:
             base_text = msg.message
             break
 
-    has_media = True
-
-    if not looks_like_deal_post(base_text, has_media):
-        print("Skipped non-deal album")
-        return
-
-    cleaned_source = remove_non_deal_links(base_text)
-    rewritten_text = await rewrite_links_in_text(client, extrapay_bot_username, cleaned_source)
+    rewritten_text = await rewrite_links_in_text(client, extrapay_bot_username, base_text)
     final_caption = build_footer_only_caption(rewritten_text, footer_text, footer_link)
 
     temp_dir = tempfile.mkdtemp(prefix="moneyzon_album_")
@@ -454,15 +479,35 @@ async def process_album(client, bot_token, dest_channel_id, messages, extrapay_b
             media_items.append((file_path, file_kind(file_path)))
 
         if media_items:
-            send_album(bot_token, dest_channel_id, media_items, final_caption)
+            send_album(
+                bot_token=bot_token,
+                chat_id=dest_channel_id,
+                media_items=media_items,
+                caption=final_caption,
+            )
             print(f"Sent album with {len(media_items)} items")
         else:
-            send_text(bot_token, dest_channel_id, final_caption)
+            send_text(
+                bot_token=bot_token,
+                chat_id=dest_channel_id,
+                text=final_caption,
+            )
+            print("Album had no downloadable media, sent as text")
+
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-async def process_channel(client, bot_token, source_channel_id, dest_channel_id, extrapay_bot_username, footer_text, footer_link, state):
+async def process_channel(
+    client: TelegramClient,
+    bot_token: str,
+    source_channel_id: int,
+    dest_channel_id: str,
+    extrapay_bot_username: str,
+    footer_text: str,
+    footer_link: str,
+    state: dict,
+):
     channel_key = str(source_channel_id)
     channel_state = state["channels"][channel_key]
 
@@ -470,16 +515,19 @@ async def process_channel(client, bot_token, source_channel_id, dest_channel_id,
     processed_group_ids = set(str(x) for x in channel_state.get("processed_group_ids", []))
     initialized = bool(channel_state.get("initialized", False))
 
+    print(f"Resolving source channel {source_channel_id}")
     source_entity = await resolve_channel_entity(client, source_channel_id)
 
     if not initialized:
         latest_id = await get_latest_message_id(client, source_entity)
         channel_state["last_message_id"] = latest_id
         channel_state["initialized"] = True
-        print(f"Initialized {source_channel_id} at {latest_id}")
+        print(f"Initialized {source_channel_id} at latest message id {latest_id}. Old messages skipped.")
         return
 
+    print(f"Checking posts in {source_channel_id} after message {last_message_id}")
     new_messages = await collect_new_messages(client, source_entity, last_message_id)
+
     if not new_messages:
         print(f"No new messages for {source_channel_id}")
         return
@@ -494,17 +542,28 @@ async def process_channel(client, bot_token, source_channel_id, dest_channel_id,
         try:
             if item["type"] == "single":
                 await process_single(
-                    client, bot_token, dest_channel_id, item_messages[0],
-                    extrapay_bot_username, footer_text, footer_link
+                    client=client,
+                    bot_token=bot_token,
+                    dest_channel_id=dest_channel_id,
+                    message=item_messages[0],
+                    extrapay_bot_username=extrapay_bot_username,
+                    footer_text=footer_text,
+                    footer_link=footer_link,
                 )
             else:
                 group_id = f"{source_channel_id}_{item['group_id']}"
                 if group_id in processed_group_ids:
+                    print(f"Skipping already processed album {group_id}")
                     continue
 
                 await process_album(
-                    client, bot_token, dest_channel_id, item_messages,
-                    extrapay_bot_username, footer_text, footer_link
+                    client=client,
+                    bot_token=bot_token,
+                    dest_channel_id=dest_channel_id,
+                    messages=item_messages,
+                    extrapay_bot_username=extrapay_bot_username,
+                    footer_text=footer_text,
+                    footer_link=footer_link,
                 )
                 processed_group_ids.add(group_id)
 
@@ -524,17 +583,25 @@ async def main():
     source_channel_ids = parse_source_channel_ids(os.environ["SOURCE_CHANNEL_IDS"])
     dest_channel_id = os.environ["DEST_CHANNEL_ID"]
     extrapay_bot_username = os.environ.get("EXTRAPAY_BOT_USERNAME", "ExtraPeBot")
+
     footer_text = os.environ.get("FOOTER_TEXT", "Powered by Moneyzon")
     footer_link = os.environ.get("FOOTER_LINK", "https://t.me/+Pn4M2jtiFZBhMDhl")
 
     state = load_state(source_channel_ids)
+
     client = TelegramClient(StringSession(user_session), api_id, api_hash)
 
     async with client:
         for source_channel_id in source_channel_ids:
             await process_channel(
-                client, bot_token, source_channel_id, dest_channel_id,
-                extrapay_bot_username, footer_text, footer_link, state
+                client=client,
+                bot_token=bot_token,
+                source_channel_id=source_channel_id,
+                dest_channel_id=dest_channel_id,
+                extrapay_bot_username=extrapay_bot_username,
+                footer_text=footer_text,
+                footer_link=footer_link,
+                state=state,
             )
 
     save_state(state)
