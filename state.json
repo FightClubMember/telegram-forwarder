@@ -7,6 +7,12 @@
     "-1001667757195": {
       "last_message_id": 0,
       "processed_group_ids": []
+    },
+    "-1002949308060": {
+      "last_message_id": 53,
+      "processed_group_ids": [
+        "-1002949308060_14189766999358477"
+      ]
     }
   }
 }
