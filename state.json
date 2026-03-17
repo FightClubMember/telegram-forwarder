@@ -1,8 +1,10 @@
 {
   "channels": {
     "-1001458177744": {
-      "last_message_id": 39980,
-      "processed_group_ids": [],
+      "last_message_id": 39986,
+      "processed_group_ids": [
+        "-1001458177744_14189860651042501"
+      ],
       "initialized": true
     },
     "-1001667757195": {
